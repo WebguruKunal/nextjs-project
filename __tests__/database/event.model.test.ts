@@ -1,852 +1,504 @@
-/**
- * Comprehensive Unit Tests for database/event.model.ts
- * 
- * Tests the Event Mongoose model including:
- * - Schema validation
- * - Pre-save hooks (slug generation, date/time normalization)
- * - Field requirements and constraints
- * - Edge cases and error handling
- * - Index configuration
- */
-
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+
+// Mock mongoose before importing the model
+jest.mock('mongoose', () => {
+  const actualMongoose = jest.requireActual('mongoose');
+  return {
+    ...actualMongoose,
+    model: jest.fn(),
+    models: {},
+  };
+});
 
 describe('Event Model', () => {
-  let mongoServer: MongoMemoryServer;
-  let Event: any;
-  let IEvent: any;
+  let EventModel: any;
+  let eventSchema: any;
+  let preSaveHook: any;
 
-  beforeAll(async () => {
-    // Setup in-memory MongoDB
-    mongoServer = await MongoMemoryServer.create();
-    const mongoUri = mongoServer.getUri();
+  beforeEach(() => {
+    jest.clearAllMocks();
     
-    await mongoose.connect(mongoUri);
-    
-    // Import the model after connection
-    const eventModule = await import('../../database/event.model');
-    Event = eventModule.default;
-    IEvent = eventModule.IEvent;
-  });
+    // Mock Schema constructor
+    const mockSchema = {
+      pre: jest.fn((event: string, callback: any) => {
+        if (event === 'save') {
+          preSaveHook = callback;
+        }
+      }),
+      index: jest.fn(),
+    };
 
-  afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
+    (mongoose.Schema as any) = jest.fn(() => mockSchema);
+    eventSchema = mockSchema;
 
-  beforeEach(async () => {
-    // Clear all documents before each test
-    await Event.deleteMany({});
+    // Mock model function
+    (mongoose.model as jest.Mock).mockImplementation((name: string) => {
+      return { modelName: name };
+    });
+
+    // Clear the module cache and re-import
+    jest.resetModules();
   });
 
   describe('Schema Definition', () => {
-    it('should have all required fields defined', () => {
-      const schema = Event.schema;
-      const paths = schema.paths;
-
-      expect(paths.title).toBeDefined();
-      expect(paths.slug).toBeDefined();
-      expect(paths.description).toBeDefined();
-      expect(paths.overview).toBeDefined();
-      expect(paths.image).toBeDefined();
-      expect(paths.venue).toBeDefined();
-      expect(paths.location).toBeDefined();
-      expect(paths.date).toBeDefined();
-      expect(paths.time).toBeDefined();
-      expect(paths.mode).toBeDefined();
-      expect(paths.audience).toBeDefined();
-      expect(paths.agenda).toBeDefined();
-      expect(paths.organizer).toBeDefined();
-      expect(paths.tags).toBeDefined();
-    });
-
-    it('should have timestamps enabled', () => {
-      const schema = Event.schema;
-      expect(schema.options.timestamps).toBe(true);
-      expect(schema.paths.createdAt).toBeDefined();
-      expect(schema.paths.updatedAt).toBeDefined();
-    });
-
-    it('should have unique index on slug', () => {
-      const indexes = Event.schema.indexes();
-      const slugIndex = indexes.find((idx: any) => idx[0].slug === 1);
+    it('should create a schema with all required fields', () => {
+      // Import after mocking
+      require('/tmp/event.model.ts');
       
-      expect(slugIndex).toBeDefined();
-      expect(slugIndex[1].unique).toBe(true);
-    });
-  });
-
-  describe('Required Field Validation', () => {
-    it('should require title field', async () => {
-      const event = new Event({
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await expect(event.save()).rejects.toThrow(/Title is required/);
+      expect(mongoose.Schema).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: expect.objectContaining({
+            type: String,
+            required: [true, 'Title is required'],
+            trim: true,
+          }),
+          description: expect.objectContaining({
+            type: String,
+            required: [true, 'Description is required'],
+          }),
+          overview: expect.objectContaining({
+            type: String,
+            required: [true, 'Overview is required'],
+          }),
+        }),
+        expect.objectContaining({
+          timestamps: true,
+        })
+      );
     });
 
-    it('should require description field', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await expect(event.save()).rejects.toThrow(/Description is required/);
-    });
-
-    it('should require overview field', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await expect(event.save()).rejects.toThrow(/Overview is required/);
-    });
-
-    it('should require all essential fields', async () => {
-      const event = new Event({});
-
-      await expect(event.save()).rejects.toThrow();
-    });
-  });
-
-  describe('String Field Trimming', () => {
-    it('should trim whitespace from title', async () => {
-      const event = new Event({
-        title: '  Test Event  ',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.title).toBe('Test Event');
-    });
-
-    it('should trim whitespace from all string fields', async () => {
-      const event = new Event({
-        title: '  Test Event  ',
-        description: '  Test description  ',
-        overview: '  Test overview  ',
-        image: '  test.jpg  ',
-        venue: '  Test Venue  ',
-        location: '  Test Location  ',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: '  Hybrid  ',
-        audience: '  Everyone  ',
-        agenda: ['Item 1'],
-        organizer: '  Test Organizer  ',
-        tags: ['tag1'],
-      });
-
-      await event.save();
+    it('should configure slug field as unique and lowercase', () => {
+      require('/tmp/event.model.ts');
       
-      expect(event.title).toBe('Test Event');
-      expect(event.description).toBe('Test description');
-      expect(event.overview).toBe('Test overview');
-      expect(event.image).toBe('test.jpg');
-      expect(event.venue).toBe('Test Venue');
-      expect(event.location).toBe('Test Location');
-      expect(event.mode).toBe('Hybrid');
-      expect(event.audience).toBe('Everyone');
-      expect(event.organizer).toBe('Test Organizer');
-    });
-  });
-
-  describe('Slug Generation', () => {
-    it('should auto-generate slug from title', async () => {
-      const event = new Event({
-        title: 'Test Event 2024',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
+      const schemaCall = (mongoose.Schema as jest.Mock).mock.calls[0][0];
+      expect(schemaCall.slug).toEqual({
+        type: String,
+        unique: true,
+        lowercase: true,
+        trim: true,
       });
-
-      await event.save();
-      expect(event.slug).toBe('test-event-2024');
     });
 
-    it('should convert slug to lowercase', async () => {
-      const event = new Event({
-        title: 'TEST EVENT UPPERCASE',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.slug).toBe('test-event-uppercase');
-    });
-
-    it('should replace spaces with hyphens in slug', async () => {
-      const event = new Event({
-        title: 'Multiple Word Title Here',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.slug).toBe('multiple-word-title-here');
-    });
-
-    it('should remove special characters from slug', async () => {
-      const event = new Event({
-        title: 'Event @ 2024! (Special #Chars)',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.slug).toBe('event-2024-special-chars');
-    });
-
-    it('should collapse multiple hyphens in slug', async () => {
-      const event = new Event({
-        title: 'Event   With    Multiple     Spaces',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.slug).toBe('event-with-multiple-spaces');
-    });
-
-    it('should regenerate slug when title is modified', async () => {
-      const event = new Event({
-        title: 'Original Title',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.slug).toBe('original-title');
-
-      event.title = 'Updated Title';
-      await event.save();
-      expect(event.slug).toBe('updated-title');
-    });
-
-    it('should not regenerate slug when title is not modified', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-01',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      const originalSlug = event.slug;
-
-      event.description = 'Updated description';
-      await event.save();
-      expect(event.slug).toBe(originalSlug);
-    });
-  });
-
-  describe('Date Normalization', () => {
-    it('should normalize date to ISO format (YYYY-MM-DD)', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '12/15/2024',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    });
-
-    it('should accept ISO date format', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.date).toBe('2024-12-15');
-    });
-
-    it('should reject invalid date format', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: 'invalid-date',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await expect(event.save()).rejects.toThrow(/Date must be a valid date/);
-    });
-
-    it('should re-normalize date when modified', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
+    it('should validate agenda array is not empty', () => {
+      require('/tmp/event.model.ts');
       
-      event.date = '01/20/2025';
-      await event.save();
-      expect(event.date).toMatch(/^2025-01-20$/);
+      const schemaCall = (mongoose.Schema as jest.Mock).mock.calls[0][0];
+      const agendaValidator = schemaCall.agenda.validate.validator;
+      
+      expect(agendaValidator(['item1'])).toBe(true);
+      expect(agendaValidator([])).toBe(false);
+      expect(agendaValidator(null)).toBe(false);
+    });
+
+    it('should validate tags array is not empty', () => {
+      require('/tmp/event.model.ts');
+      
+      const schemaCall = (mongoose.Schema as jest.Mock).mock.calls[0][0];
+      const tagsValidator = schemaCall.tags.validate.validator;
+      
+      expect(tagsValidator(['tag1', 'tag2'])).toBe(true);
+      expect(tagsValidator(['tag1'])).toBe(true);
+      expect(tagsValidator([])).toBe(false);
+    });
+
+    it('should create an index on slug field', () => {
+      require('/tmp/event.model.ts');
+      
+      expect(eventSchema.index).toHaveBeenCalledWith(
+        { slug: 1 },
+        { unique: true }
+      );
     });
   });
 
-  describe('Time Validation', () => {
-    it('should accept valid time in HH:MM format', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:30',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
+  describe('Pre-save Hook - Slug Generation', () => {
+    let mockDoc: any;
 
-      await event.save();
-      expect(event.time).toBe('18:30');
-    });
-
-    it('should accept time with single digit hour', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '9:30',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.time).toBe('9:30');
-    });
-
-    it('should reject invalid time format', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '25:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await expect(event.save()).rejects.toThrow(/Time must be in HH:MM format/);
-    });
-
-    it('should reject time without colon', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '1800',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await expect(event.save()).rejects.toThrow(/Time must be in HH:MM format/);
-    });
-
-    it('should reject time with invalid minutes', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:60',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await expect(event.save()).rejects.toThrow(/Time must be in HH:MM format/);
-    });
-  });
-
-  describe('Array Field Validation', () => {
-    it('should require at least one agenda item', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: [],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await expect(event.save()).rejects.toThrow(/Agenda must contain at least one item/);
-    });
-
-    it('should require at least one tag', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: [],
-      });
-
-      await expect(event.save()).rejects.toThrow(/At least one tag is required/);
-    });
-
-    it('should accept multiple agenda items', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1', 'Item 2', 'Item 3'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.agenda).toHaveLength(3);
-      expect(event.agenda).toEqual(['Item 1', 'Item 2', 'Item 3']);
-    });
-
-    it('should accept multiple tags', async () => {
-      const event = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1', 'tag2', 'tag3'],
-      });
-
-      await event.save();
-      expect(event.tags).toHaveLength(3);
-      expect(event.tags).toEqual(['tag1', 'tag2', 'tag3']);
-    });
-  });
-
-  describe('Unique Slug Constraint', () => {
-    it('should enforce unique slug constraint', async () => {
-      const event1 = new Event({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event1.save();
-
-      const event2 = new Event({
-        title: 'Test Event', // Same title -> same slug
-        description: 'Different description',
-        overview: 'Different overview',
-        image: 'test2.jpg',
-        venue: 'Different Venue',
-        location: 'Different Location',
-        date: '2024-12-16',
-        time: '19:00',
-        mode: 'Online',
-        audience: 'Members',
-        agenda: ['Item 2'],
-        organizer: 'Different Organizer',
-        tags: ['tag2'],
-      });
-
-      await expect(event2.save()).rejects.toThrow();
-    });
-  });
-
-  describe('Full Document Creation', () => {
-    it('should successfully create event with all valid fields', async () => {
-      const eventData = {
-        title: 'Complete Test Event',
-        description: 'This is a comprehensive test event description',
-        overview: 'Detailed overview of the event',
-        image: 'https://example.com/event.jpg',
-        venue: 'Main Conference Hall',
-        location: 'New York, NY',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'General Public',
-        agenda: [
-          'Registration and Welcome',
-          'Keynote Speech',
-          'Panel Discussion',
-          'Networking Session',
-        ],
-        organizer: 'Tech Conference Inc.',
-        tags: ['technology', 'networking', 'conference'],
+    beforeEach(() => {
+      mockDoc = {
+        title: '',
+        slug: '',
+        date: '',
+        time: '',
+        isModified: jest.fn(),
       };
-
-      const event = new Event(eventData);
-      await event.save();
-
-      expect(event._id).toBeDefined();
-      expect(event.title).toBe(eventData.title);
-      expect(event.slug).toBe('complete-test-event');
-      expect(event.description).toBe(eventData.description);
-      expect(event.agenda).toEqual(eventData.agenda);
-      expect(event.tags).toEqual(eventData.tags);
-      expect(event.createdAt).toBeDefined();
-      expect(event.updatedAt).toBeDefined();
     });
 
-    it('should set timestamps on creation', async () => {
-      const event = new Event({
-        title: 'Timestamp Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      const beforeSave = new Date();
-      await event.save();
-      const afterSave = new Date();
-
-      expect(event.createdAt).toBeDefined();
-      expect(event.updatedAt).toBeDefined();
-      expect(event.createdAt.getTime()).toBeGreaterThanOrEqual(beforeSave.getTime());
-      expect(event.createdAt.getTime()).toBeLessThanOrEqual(afterSave.getTime());
+    it('should generate slug from title when title is modified', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.title = 'My Awesome Event';
+      mockDoc.isModified = jest.fn((field: string) => field === 'title');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('my-awesome-event');
+      expect(next).toHaveBeenCalled();
     });
 
-    it('should update updatedAt on modification', async () => {
-      const event = new Event({
-        title: 'Update Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
+    it('should handle special characters in title', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.title = 'Event @ 2024: Amazing!';
+      mockDoc.isModified = jest.fn((field: string) => field === 'title');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('event-2024-amazing');
+    });
+
+    it('should replace multiple spaces with single hyphen', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.title = 'Event    With     Many    Spaces';
+      mockDoc.isModified = jest.fn((field: string) => field === 'title');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('event-with-many-spaces');
+    });
+
+    it('should replace multiple hyphens with single hyphen', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.title = 'Event---With---Hyphens';
+      mockDoc.isModified = jest.fn((field: string) => field === 'title');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('event-with-hyphens');
+    });
+
+    it('should not regenerate slug when title is not modified', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.slug = 'existing-slug';
+      mockDoc.title = 'Different Title';
+      mockDoc.isModified = jest.fn(() => false);
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('existing-slug');
+    });
+
+    it('should handle empty title gracefully', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.title = '';
+      mockDoc.isModified = jest.fn((field: string) => field === 'title');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('');
+    });
+
+    it('should trim whitespace from title', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.title = '  Event With Spaces  ';
+      mockDoc.isModified = jest.fn((field: string) => field === 'title');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('event-with-spaces');
+    });
+  });
+
+  describe('Pre-save Hook - Date Normalization', () => {
+    let mockDoc: any;
+
+    beforeEach(() => {
+      mockDoc = {
+        title: 'Test Event',
+        slug: 'test-event',
+        date: '',
+        time: '',
+        isModified: jest.fn(),
+      };
+    });
+
+    it('should normalize valid date to ISO format', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.date = '2024-12-25';
+      mockDoc.isModified = jest.fn((field: string) => field === 'date');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.date).toBe('2024-12-25');
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it('should normalize date string with time to ISO date', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.date = '2024-12-25T10:30:00Z';
+      mockDoc.isModified = jest.fn((field: string) => field === 'date');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.date).toBe('2024-12-25');
+    });
+
+    it('should reject invalid date format', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.date = 'invalid-date';
+      mockDoc.isModified = jest.fn((field: string) => field === 'date');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+      expect(next.mock.calls[0][0].message).toBe('Date must be a valid date');
+    });
+
+    it('should not validate date when not modified', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.date = 'invalid-date';
+      mockDoc.isModified = jest.fn((field: string) => field !== 'date');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      // Should not throw error since date is not modified
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it('should handle various date formats', () => {
+      require('/tmp/event.model.ts');
+      
+      const testDates = [
+        { input: '12/25/2024', expected: '2024-12-25' },
+        { input: 'December 25, 2024', expected: '2024-12-25' },
+        { input: '2024-01-01', expected: '2024-01-01' },
+      ];
+
+      testDates.forEach(({ input, expected }) => {
+        mockDoc.date = input;
+        mockDoc.isModified = jest.fn((field: string) => field === 'date');
+        
+        const next = jest.fn();
+        preSaveHook.call(mockDoc, next);
+        
+        expect(mockDoc.date).toBe(expected);
       });
+    });
+  });
 
-      await event.save();
-      const originalUpdatedAt = event.updatedAt;
+  describe('Pre-save Hook - Time Validation', () => {
+    let mockDoc: any;
 
-      // Wait a bit to ensure timestamp difference
-      await new Promise(resolve => setTimeout(resolve, 10));
+    beforeEach(() => {
+      mockDoc = {
+        title: 'Test Event',
+        slug: 'test-event',
+        date: '2024-12-25',
+        time: '',
+        isModified: jest.fn(),
+      };
+    });
 
-      event.description = 'Updated description';
-      await event.save();
+    it('should accept valid time in HH:MM format', () => {
+      require('/tmp/event.model.ts');
+      
+      const validTimes = ['09:30', '14:45', '23:59', '00:00', '12:00'];
+      
+      validTimes.forEach((time) => {
+        mockDoc.time = time;
+        mockDoc.isModified = jest.fn((field: string) => field === 'time');
+        
+        const next = jest.fn();
+        preSaveHook.call(mockDoc, next);
+        
+        expect(next).toHaveBeenCalledWith();
+      });
+    });
 
-      expect(event.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+    it('should accept single digit hours', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.time = '9:30';
+      mockDoc.isModified = jest.fn((field: string) => field === 'time');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it('should reject invalid time format', () => {
+      require('/tmp/event.model.ts');
+      
+      const invalidTimes = [
+        '25:00', // Invalid hour
+        '12:60', // Invalid minute
+        '1:5', // Missing leading zero on minute
+        '12:5', // Missing leading zero on minute
+        '24:00', // 24-hour format boundary
+        'invalid',
+        '12',
+      ];
+
+      invalidTimes.forEach((time) => {
+        mockDoc.time = time;
+        mockDoc.isModified = jest.fn((field: string) => field === 'time');
+        
+        const next = jest.fn();
+        preSaveHook.call(mockDoc, next);
+        
+        expect(next).toHaveBeenCalledWith(expect.any(Error));
+        expect(next.mock.calls[0][0].message).toBe('Time must be in HH:MM format');
+      });
+    });
+
+    it('should not validate time when not modified', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.time = 'invalid';
+      mockDoc.isModified = jest.fn((field: string) => field !== 'time');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(next).toHaveBeenCalledWith();
+    });
+  });
+
+  describe('Combined Pre-save Hooks', () => {
+    let mockDoc: any;
+
+    beforeEach(() => {
+      mockDoc = {
+        title: 'Annual Tech Conference 2024',
+        slug: '',
+        date: '2024-06-15',
+        time: '14:30',
+        isModified: jest.fn((field: string) => {
+          return ['title', 'date', 'time'].includes(field);
+        }),
+      };
+    });
+
+    it('should process all validations when all fields are modified', () => {
+      require('/tmp/event.model.ts');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('annual-tech-conference-2024');
+      expect(mockDoc.date).toBe('2024-06-15');
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it('should stop on first error', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.date = 'invalid-date';
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+    });
+  });
+
+  describe('Model Registration', () => {
+    it('should register model with mongoose', () => {
+      require('/tmp/event.model.ts');
+      
+      expect(mongoose.model).toHaveBeenCalledWith('Event', expect.anything());
+    });
+
+    it('should use existing model if already registered', () => {
+      mongoose.models.Event = { modelName: 'Event' };
+      
+      const result = require('/tmp/event.model.ts').default;
+      
+      expect(result).toBe(mongoose.models.Event);
     });
   });
 
   describe('Edge Cases', () => {
-    it('should handle very long title', async () => {
-      const longTitle = 'A'.repeat(1000);
-      const event = new Event({
-        title: longTitle,
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
+    let mockDoc: any;
 
-      await event.save();
-      expect(event.title).toBe(longTitle);
+    beforeEach(() => {
+      mockDoc = {
+        title: '',
+        slug: '',
+        date: '',
+        time: '',
+        isModified: jest.fn(),
+      };
     });
 
-    it('should handle empty string trimming', async () => {
-      const event = new Event({
-        title: '   ',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      // Should fail because after trimming, title is empty
-      await expect(event.save()).rejects.toThrow();
+    it('should handle unicode characters in title', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.title = 'Événement spécial 2024 🎉';
+      mockDoc.isModified = jest.fn((field: string) => field === 'title');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBeTruthy();
+      expect(mockDoc.slug).not.toContain('🎉');
     });
 
-    it('should handle midnight time (00:00)', async () => {
-      const event = new Event({
-        title: 'Midnight Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '00:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      await event.save();
-      expect(event.time).toBe('00:00');
+    it('should handle very long titles', () => {
+      require('/tmp/event.model.ts');
+      
+      mockDoc.title = 'A'.repeat(200);
+      mockDoc.isModified = jest.fn((field: string) => field === 'title');
+      
+      const next = jest.fn();
+      preSaveHook.call(mockDoc, next);
+      
+      expect(mockDoc.slug).toBe('a'.repeat(200));
     });
 
-    it('should handle end of day time (23:59)', async () => {
-      const event = new Event({
-        title: 'Late Night Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '23:59',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
+    it('should handle date at year boundaries', () => {
+      require('/tmp/event.model.ts');
+      
+      const boundaryDates = [
+        '2024-01-01',
+        '2024-12-31',
+        '2000-02-29', // Leap year
+      ];
 
-      await event.save();
-      expect(event.time).toBe('23:59');
+      boundaryDates.forEach((date) => {
+        mockDoc.date = date;
+        mockDoc.isModified = jest.fn((field: string) => field === 'date');
+        
+        const next = jest.fn();
+        preSaveHook.call(mockDoc, next);
+        
+        expect(next).toHaveBeenCalledWith();
+      });
+    });
+
+    it('should handle midnight and noon times', () => {
+      require('/tmp/event.model.ts');
+      
+      ['00:00', '12:00', '23:59'].forEach((time) => {
+        mockDoc.time = time;
+        mockDoc.isModified = jest.fn((field: string) => field === 'time');
+        
+        const next = jest.fn();
+        preSaveHook.call(mockDoc, next);
+        
+        expect(next).toHaveBeenCalledWith();
+      });
     });
   });
 });

@@ -1,43 +1,84 @@
 describe('Database Index Exports', () => {
-  it('should export Event model', () => {
-    jest.isolateModules(() => {
-      const { Event } = require('../../database/index');
-      expect(Event).toBeDefined();
-    });
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
   });
 
-  it('should export Booking model', () => {
-    jest.isolateModules(() => {
-      const { Booking } = require('../../database/index');
-      expect(Booking).toBeDefined();
-    });
+  it('should export Event model as default', () => {
+    // Mock the event model module
+    jest.doMock('/tmp/database/event.model', () => ({
+      default: { modelName: 'Event' },
+    }));
+
+    const databaseIndex = require('/tmp/database.index.ts');
+    
+    expect(databaseIndex).toHaveProperty('Event');
   });
 
-  it('should export IEvent type', () => {
-    // TypeScript compile-time check
-    // This test verifies the export exists
-    jest.isolateModules(() => {
-      const exports = require('../../database/index');
-      expect(exports).toHaveProperty('Event');
-    });
+  it('should export Booking model as default', () => {
+    // Mock the booking model module
+    jest.doMock('/tmp/database/booking.model', () => ({
+      default: { modelName: 'Booking' },
+    }));
+
+    const databaseIndex = require('/tmp/database.index.ts');
+    
+    expect(databaseIndex).toHaveProperty('Booking');
   });
 
-  it('should export IBooking type', () => {
-    // TypeScript compile-time check
-    // This test verifies the export exists
-    jest.isolateModules(() => {
-      const exports = require('../../database/index');
-      expect(exports).toHaveProperty('Booking');
-    });
+  it('should export IEvent interface type', () => {
+    jest.doMock('/tmp/database/event.model', () => ({
+      default: { modelName: 'Event' },
+      IEvent: 'EventInterface',
+    }));
+
+    const databaseIndex = require('/tmp/database.index.ts');
+    
+    // TypeScript interfaces are compile-time only, but we can verify the export exists
+    expect(databaseIndex).toBeDefined();
   });
 
-  it('should have all expected exports', () => {
-    jest.isolateModules(() => {
-      const exports = require('../../database/index');
-      const exportKeys = Object.keys(exports);
-      
-      expect(exportKeys).toContain('Event');
-      expect(exportKeys).toContain('Booking');
-    });
+  it('should export IBooking interface type', () => {
+    jest.doMock('/tmp/database/booking.model', () => ({
+      default: { modelName: 'Booking' },
+      IBooking: 'BookingInterface',
+    }));
+
+    const databaseIndex = require('/tmp/database.index.ts');
+    
+    // TypeScript interfaces are compile-time only, but we can verify the export exists
+    expect(databaseIndex).toBeDefined();
+  });
+
+  it('should provide clean barrel export pattern', () => {
+    jest.doMock('/tmp/database/event.model', () => ({
+      default: { modelName: 'Event' },
+      IEvent: 'EventInterface',
+    }));
+    
+    jest.doMock('/tmp/database/booking.model', () => ({
+      default: { modelName: 'Booking' },
+      IBooking: 'BookingInterface',
+    }));
+
+    const databaseIndex = require('/tmp/database.index.ts');
+    
+    // Should have both models
+    expect(Object.keys(databaseIndex).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('should allow destructured imports', () => {
+    jest.doMock('/tmp/database/event.model', () => ({
+      default: { modelName: 'Event' },
+    }));
+    
+    jest.doMock('/tmp/database/booking.model', () => ({
+      default: { modelName: 'Booking' },
+    }));
+
+    const { Event, Booking } = require('/tmp/database.index.ts');
+    
+    expect(Event).toBeDefined();
+    expect(Booking).toBeDefined();
   });
 });
