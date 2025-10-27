@@ -13,4 +13,11 @@ module.exports = {
     '!**/node_modules/**',
   ],
   setupFilesAfterEnv: ['<rootDir>/__tests__/setup.ts'],
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', {
+      tsconfig: {
+        jsx: 'react',
+      },
+    }],
+  },
 };

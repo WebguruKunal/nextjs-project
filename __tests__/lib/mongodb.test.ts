@@ -1,396 +1,379 @@
+/**
+ * Comprehensive Unit Tests for lib/mongodb.ts
+ * 
+ * Tests the MongoDB connection module including:
+ * - Connection establishment and caching
+ * - Error handling
+ * - Environment variable validation
+ * - Connection reuse
+ * - Promise handling and concurrency
+ */
+
 import mongoose from 'mongoose';
 
-// Store original env
-const originalEnv = process.env.MONGODB_URI;
+describe('MongoDB Connection Module', () => {
+  let originalEnv: NodeJS.ProcessEnv;
+  let originalGlobalMongoose: any;
+  let connectDB: () => Promise<typeof mongoose>;
 
-// Mock mongoose
-jest.mock('mongoose', () => ({
-  connect: jest.fn(),
-}));
+  beforeAll(() => {
+    // Save original environment and global state
+    originalEnv = { ...process.env };
+    originalGlobalMongoose = (global as any).mongoose;
+  });
 
-describe('MongoDB Connection', () => {
-  let connectDB: any;
-  let mockConnect: jest.Mock;
-
-  beforeEach(async () => {
-    jest.clearAllMocks();
+  beforeEach(() => {
+    // Reset environment and global state before each test
+    process.env = { ...originalEnv };
+    (global as any).mongoose = undefined;
+    
+    // Clear module cache to get fresh import
     jest.resetModules();
-    
-    // Clear global cache
-    if (global.mongoose) {
-      global.mongoose = undefined;
-    }
-    
-    mockConnect = mongoose.connect as jest.Mock;
-    
-    // Set test environment variable
-    process.env.MONGODB_URI = 'mongodb://localhost:27017/test-db';
+    jest.clearAllMocks();
   });
 
   afterEach(() => {
-    process.env.MONGODB_URI = originalEnv;
+    // Restore original state
+    process.env = originalEnv;
+    (global as any).mongoose = originalGlobalMongoose;
   });
 
   describe('Environment Variable Validation', () => {
-    it('should throw error if MONGODB_URI is not defined', () => {
+    it('should throw error when MONGODB_URI is not defined', () => {
       delete process.env.MONGODB_URI;
       
       expect(() => {
-        jest.isolateModules(() => {
-          require('../../lib/mongodb');
-        });
+        require('../../lib/mongodb');
       }).toThrow('Please define the MONGODB_URI environment variable inside .env.local');
     });
 
-    it('should not throw if MONGODB_URI is defined', () => {
-      process.env.MONGODB_URI = 'mongodb://localhost:27017/test-db';
+    it('should throw error when MONGODB_URI is empty string', () => {
+      process.env.MONGODB_URI = '';
       
       expect(() => {
-        jest.isolateModules(() => {
-          require('../../lib/mongodb');
-        });
+        require('../../lib/mongodb');
+      }).toThrow('Please define the MONGODB_URI environment variable inside .env.local');
+    });
+
+    it('should not throw error when MONGODB_URI is properly defined', () => {
+      process.env.MONGODB_URI = 'mongodb://localhost:27017/testdb';
+      
+      expect(() => {
+        require('../../lib/mongodb');
       }).not.toThrow();
     });
   });
 
-  describe('Connection Management', () => {
+  describe('Connection Establishment', () => {
     beforeEach(() => {
-      process.env.MONGODB_URI = 'mongodb://localhost:27017/test-db';
+      process.env.MONGODB_URI = 'mongodb://localhost:27017/testdb';
+      
+      // Mock mongoose.connect
+      jest.spyOn(mongoose, 'connect').mockResolvedValue(mongoose);
+      jest.spyOn(console, 'log').mockImplementation();
     });
 
-    it('should establish new connection on first call', async () => {
-      const mockMongooseInstance = { connection: 'mock' };
-      mockConnect.mockResolvedValue(mockMongooseInstance);
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('should establish connection on first call', async () => {
+      connectDB = require('../../lib/mongodb').default;
       
       const result = await connectDB();
       
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(mockConnect).toHaveBeenCalledWith(
-        'mongodb://localhost:27017/test-db',
+      expect(mongoose.connect).toHaveBeenCalledTimes(1);
+      expect(mongoose.connect).toHaveBeenCalledWith(
+        'mongodb://localhost:27017/testdb',
         { bufferCommands: false }
       );
-      expect(result).toBe(mockMongooseInstance);
+      expect(result).toBe(mongoose);
+      expect(console.log).toHaveBeenCalledWith('MongoDB connected successfully');
+    });
+
+    it('should use correct connection options', async () => {
+      connectDB = require('../../lib/mongodb').default;
+      
+      await connectDB();
+      
+      expect(mongoose.connect).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          bufferCommands: false,
+        })
+      );
+    });
+
+    it('should log success message on successful connection', async () => {
+      connectDB = require('../../lib/mongodb').default;
+      
+      await connectDB();
+      
+      expect(console.log).toHaveBeenCalledWith('MongoDB connected successfully');
+    });
+  });
+
+  describe('Connection Caching', () => {
+    beforeEach(() => {
+      process.env.MONGODB_URI = 'mongodb://localhost:27017/testdb';
+      jest.spyOn(mongoose, 'connect').mockResolvedValue(mongoose);
+      jest.spyOn(console, 'log').mockImplementation();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
     });
 
     it('should return cached connection on subsequent calls', async () => {
-      const mockMongooseInstance = { connection: 'mock' };
-      mockConnect.mockResolvedValue(mockMongooseInstance);
+      connectDB = require('../../lib/mongodb').default;
       
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
+      const firstCall = await connectDB();
+      const secondCall = await connectDB();
+      const thirdCall = await connectDB();
       
-      const result1 = await connectDB();
-      const result2 = await connectDB();
-      const result3 = await connectDB();
-      
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(result1).toBe(mockMongooseInstance);
-      expect(result2).toBe(mockMongooseInstance);
-      expect(result3).toBe(mockMongooseInstance);
+      expect(mongoose.connect).toHaveBeenCalledTimes(1);
+      expect(firstCall).toBe(secondCall);
+      expect(secondCall).toBe(thirdCall);
     });
 
-    it('should use cached promise if connection in progress', async () => {
-      const mockMongooseInstance = { connection: 'mock' };
-      let resolveConnect: any;
-      const connectPromise = new Promise((resolve) => {
-        resolveConnect = resolve;
-      });
-      mockConnect.mockReturnValue(connectPromise);
+    it('should reuse connection promise during concurrent calls', async () => {
+      connectDB = require('../../lib/mongodb').default;
       
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      const promise1 = connectDB();
-      const promise2 = connectDB();
-      
-      resolveConnect(mockMongooseInstance);
-      
-      const [result1, result2] = await Promise.all([promise1, promise2]);
-      
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(result1).toBe(mockMongooseInstance);
-      expect(result2).toBe(mockMongooseInstance);
-    });
-
-    it('should disable buffer commands for fail-fast behavior', async () => {
-      const mockMongooseInstance = { connection: 'mock' };
-      mockConnect.mockResolvedValue(mockMongooseInstance);
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await connectDB();
-      
-      expect(mockConnect).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ bufferCommands: false })
-      );
-    });
-
-    it('should log success message on connection', async () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-      const mockMongooseInstance = { connection: 'mock' };
-      mockConnect.mockResolvedValue(mockMongooseInstance);
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await connectDB();
-      
-      expect(consoleSpy).toHaveBeenCalledWith('MongoDB connected successfully');
-      
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe('Error Handling', () => {
-    beforeEach(() => {
-      process.env.MONGODB_URI = 'mongodb://localhost:27017/test-db';
-    });
-
-    it('should reset promise cache on connection error', async () => {
-      const error = new Error('Connection failed');
-      mockConnect
-        .mockRejectedValueOnce(error)
-        .mockResolvedValueOnce({ connection: 'mock' });
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await expect(connectDB()).rejects.toThrow('Connection failed');
-      
-      const result = await connectDB();
-      expect(mockConnect).toHaveBeenCalledTimes(2);
-      expect(result).toEqual({ connection: 'mock' });
-    });
-
-    it('should propagate connection errors', async () => {
-      const error = new Error('Network timeout');
-      mockConnect.mockRejectedValue(error);
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await expect(connectDB()).rejects.toThrow('Network timeout');
-    });
-
-    it('should handle authentication errors', async () => {
-      const error = new Error('Authentication failed');
-      mockConnect.mockRejectedValue(error);
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await expect(connectDB()).rejects.toThrow('Authentication failed');
-    });
-
-    it('should allow retry after error', async () => {
-      const error = new Error('Temporary failure');
-      const mockMongooseInstance = { connection: 'mock' };
-      
-      mockConnect
-        .mockRejectedValueOnce(error)
-        .mockRejectedValueOnce(error)
-        .mockResolvedValueOnce(mockMongooseInstance);
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await expect(connectDB()).rejects.toThrow('Temporary failure');
-      await expect(connectDB()).rejects.toThrow('Temporary failure');
-      
-      const result = await connectDB();
-      expect(result).toBe(mockMongooseInstance);
-      expect(mockConnect).toHaveBeenCalledTimes(3);
-    });
-  });
-
-  describe('Global Cache Management', () => {
-    beforeEach(() => {
-      process.env.MONGODB_URI = 'mongodb://localhost:27017/test-db';
-    });
-
-    it('should initialize global cache if not exists', () => {
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      expect(global.mongoose).toBeDefined();
-      expect(global.mongoose?.conn).toBeNull();
-      expect(global.mongoose?.promise).toBeNull();
-    });
-
-    it('should use existing global cache', async () => {
-      const existingCache = {
-        conn: { connection: 'existing' } as any,
-        promise: null,
-      };
-      global.mongoose = existingCache;
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      const result = await connectDB();
-      
-      expect(mockConnect).not.toHaveBeenCalled();
-      expect(result).toBe(existingCache.conn);
-    });
-
-    it('should persist connection across module reloads', async () => {
-      const mockMongooseInstance = { connection: 'mock' };
-      mockConnect.mockResolvedValue(mockMongooseInstance);
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await connectDB();
-      
-      const cachedConn = global.mongoose?.conn;
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      const result = await connectDB();
-      
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(result).toBe(cachedConn);
-    });
-  });
-
-  describe('Connection Options', () => {
-    beforeEach(() => {
-      process.env.MONGODB_URI = 'mongodb://localhost:27017/test-db';
-    });
-
-    it('should pass correct connection URI', async () => {
-      process.env.MONGODB_URI = 'mongodb://custom-host:27017/custom-db';
-      mockConnect.mockResolvedValue({ connection: 'mock' });
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await connectDB();
-      
-      expect(mockConnect).toHaveBeenCalledWith(
-        'mongodb://custom-host:27017/custom-db',
-        expect.any(Object)
-      );
-    });
-
-    it('should configure bufferCommands option', async () => {
-      mockConnect.mockResolvedValue({ connection: 'mock' });
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
-      await connectDB();
-      
-      const callArgs = mockConnect.mock.calls[0];
-      expect(callArgs[1]).toEqual({ bufferCommands: false });
-    });
-  });
-
-  describe('Concurrent Connection Attempts', () => {
-    beforeEach(() => {
-      process.env.MONGODB_URI = 'mongodb://localhost:27017/test-db';
-    });
-
-    it('should handle multiple simultaneous connection attempts', async () => {
-      const mockMongooseInstance = { connection: 'mock' };
-      let resolveConnect: any;
-      const connectPromise = new Promise((resolve) => {
-        resolveConnect = () => resolve(mockMongooseInstance);
-      });
-      mockConnect.mockReturnValue(connectPromise);
-      
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
-      
+      // Make multiple concurrent calls
       const promises = [
-        connectDB(),
         connectDB(),
         connectDB(),
         connectDB(),
         connectDB(),
       ];
       
-      resolveConnect();
+      await Promise.all(promises);
       
-      const results = await Promise.all(promises);
-      
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-      results.forEach(result => {
-        expect(result).toBe(mockMongooseInstance);
-      });
+      // Should only connect once despite concurrent calls
+      expect(mongoose.connect).toHaveBeenCalledTimes(1);
     });
 
-    it('should handle race condition with cached connection', async () => {
-      const mockMongooseInstance = { connection: 'mock' };
-      mockConnect.mockResolvedValue(mockMongooseInstance);
+    it('should cache connection in global namespace', async () => {
+      connectDB = require('../../lib/mongodb').default;
       
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
+      await connectDB();
       
-      const firstCall = await connectDB();
+      const globalCache = (global as any).mongoose;
+      expect(globalCache).toBeDefined();
+      expect(globalCache.conn).toBe(mongoose);
+      expect(globalCache.promise).toBeInstanceOf(Promise);
+    });
+
+    it('should initialize global cache if not present', () => {
+      expect((global as any).mongoose).toBeUndefined();
       
-      const subsequentCalls = await Promise.all([
-        connectDB(),
-        connectDB(),
-        connectDB(),
-      ]);
+      connectDB = require('../../lib/mongodb').default;
       
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(firstCall).toBe(mockMongooseInstance);
-      subsequentCalls.forEach(result => {
-        expect(result).toBe(mockMongooseInstance);
+      expect((global as any).mongoose).toBeDefined();
+      expect((global as any).mongoose).toEqual({
+        conn: null,
+        promise: null,
       });
     });
   });
 
-  describe('TypeScript Type Definitions', () => {
-    it('should define MongooseCache interface correctly', () => {
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
+  describe('Error Handling', () => {
+    beforeEach(() => {
+      process.env.MONGODB_URI = 'mongodb://localhost:27017/testdb';
+      jest.spyOn(console, 'log').mockImplementation();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('should throw error when connection fails', async () => {
+      const connectionError = new Error('Connection failed');
+      jest.spyOn(mongoose, 'connect').mockRejectedValue(connectionError);
       
-      expect(global.mongoose).toMatchObject({
-        conn: expect.anything(),
-        promise: expect.anything(),
+      connectDB = require('../../lib/mongodb').default;
+      
+      await expect(connectDB()).rejects.toThrow('Connection failed');
+    });
+
+    it('should reset promise cache on connection failure', async () => {
+      const connectionError = new Error('Connection failed');
+      jest.spyOn(mongoose, 'connect').mockRejectedValueOnce(connectionError);
+      
+      connectDB = require('../../lib/mongodb').default;
+      
+      // First call should fail
+      await expect(connectDB()).rejects.toThrow('Connection failed');
+      
+      // Verify promise was reset
+      const globalCache = (global as any).mongoose;
+      expect(globalCache.promise).toBeNull();
+      expect(globalCache.conn).toBeNull();
+    });
+
+    it('should allow retry after failed connection', async () => {
+      const connectionError = new Error('Connection failed');
+      jest.spyOn(mongoose, 'connect')
+        .mockRejectedValueOnce(connectionError)
+        .mockResolvedValueOnce(mongoose);
+      
+      connectDB = require('../../lib/mongodb').default;
+      
+      // First call fails
+      await expect(connectDB()).rejects.toThrow('Connection failed');
+      
+      // Second call should succeed
+      const result = await connectDB();
+      expect(result).toBe(mongoose);
+      expect(mongoose.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it('should handle network timeout errors', async () => {
+      const timeoutError = new Error('ETIMEDOUT');
+      (timeoutError as any).code = 'ETIMEDOUT';
+      jest.spyOn(mongoose, 'connect').mockRejectedValue(timeoutError);
+      
+      connectDB = require('../../lib/mongodb').default;
+      
+      await expect(connectDB()).rejects.toThrow('ETIMEDOUT');
+    });
+
+    it('should handle authentication errors', async () => {
+      const authError = new Error('Authentication failed');
+      (authError as any).name = 'MongoServerError';
+      jest.spyOn(mongoose, 'connect').mockRejectedValue(authError);
+      
+      connectDB = require('../../lib/mongodb').default;
+      
+      await expect(connectDB()).rejects.toThrow('Authentication failed');
+    });
+
+    it('should handle invalid connection string errors', async () => {
+      const invalidUriError = new Error('Invalid connection string');
+      jest.spyOn(mongoose, 'connect').mockRejectedValue(invalidUriError);
+      
+      connectDB = require('../../lib/mongodb').default;
+      
+      await expect(connectDB()).rejects.toThrow('Invalid connection string');
+    });
+  });
+
+  describe('Connection Options', () => {
+    beforeEach(() => {
+      process.env.MONGODB_URI = 'mongodb://localhost:27017/testdb';
+      jest.spyOn(mongoose, 'connect').mockResolvedValue(mongoose);
+      jest.spyOn(console, 'log').mockImplementation();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('should disable buffer commands for fail-fast behavior', async () => {
+      connectDB = require('../../lib/mongodb').default;
+      
+      await connectDB();
+      
+      const callArgs = (mongoose.connect as jest.Mock).mock.calls[0];
+      expect(callArgs[1]).toEqual({
+        bufferCommands: false,
       });
     });
 
-    it('should return Promise<typeof mongoose>', async () => {
-      const mockMongooseInstance = { connection: 'mock' };
-      mockConnect.mockResolvedValue(mockMongooseInstance);
+    it('should not include deprecated options', async () => {
+      connectDB = require('../../lib/mongodb').default;
       
-      jest.isolateModules(() => {
-        connectDB = require('../../lib/mongodb').default;
-      });
+      await connectDB();
       
-      const result = connectDB();
-      expect(result).toBeInstanceOf(Promise);
+      const callArgs = (mongoose.connect as jest.Mock).mock.calls[0];
+      const options = callArgs[1];
       
-      const resolved = await result;
-      expect(resolved).toBeDefined();
+      // Verify no deprecated options are used
+      expect(options).not.toHaveProperty('useNewUrlParser');
+      expect(options).not.toHaveProperty('useUnifiedTopology');
+      expect(options).not.toHaveProperty('useFindAndModify');
+      expect(options).not.toHaveProperty('useCreateIndex');
+    });
+  });
+
+  describe('Connection URI Handling', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('should accept MongoDB connection string with credentials', async () => {
+      process.env.MONGODB_URI = 'mongodb://user:pass@localhost:27017/testdb';
+      jest.spyOn(mongoose, 'connect').mockResolvedValue(mongoose);
+      jest.spyOn(console, 'log').mockImplementation();
+      
+      connectDB = require('../../lib/mongodb').default;
+      await connectDB();
+      
+      expect(mongoose.connect).toHaveBeenCalledWith(
+        'mongodb://user:pass@localhost:27017/testdb',
+        expect.any(Object)
+      );
+    });
+
+    it('should accept MongoDB Atlas connection string', async () => {
+      process.env.MONGODB_URI = 'mongodb+srv://user:pass@cluster.mongodb.net/testdb?retryWrites=true';
+      jest.spyOn(mongoose, 'connect').mockResolvedValue(mongoose);
+      jest.spyOn(console, 'log').mockImplementation();
+      
+      connectDB = require('../../lib/mongodb').default;
+      await connectDB();
+      
+      expect(mongoose.connect).toHaveBeenCalledWith(
+        'mongodb+srv://user:pass@cluster.mongodb.net/testdb?retryWrites=true',
+        expect.any(Object)
+      );
+    });
+
+    it('should accept connection string with multiple hosts', async () => {
+      process.env.MONGODB_URI = 'mongodb://host1:27017,host2:27017,host3:27017/testdb?replicaSet=rs0';
+      jest.spyOn(mongoose, 'connect').mockResolvedValue(mongoose);
+      jest.spyOn(console, 'log').mockImplementation();
+      
+      connectDB = require('../../lib/mongodb').default;
+      await connectDB();
+      
+      expect(mongoose.connect).toHaveBeenCalledWith(
+        expect.stringContaining('host1:27017,host2:27017,host3:27017'),
+        expect.any(Object)
+      );
+    });
+  });
+
+  describe('Type Safety', () => {
+    beforeEach(() => {
+      process.env.MONGODB_URI = 'mongodb://localhost:27017/testdb';
+      jest.spyOn(mongoose, 'connect').mockResolvedValue(mongoose);
+      jest.spyOn(console, 'log').mockImplementation();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('should return mongoose instance type', async () => {
+      connectDB = require('../../lib/mongodb').default;
+      
+      const result = await connectDB();
+      
+      // Type assertion - would fail at compile time if types are wrong
+      expect(result).toBe(mongoose);
+      expect(typeof result.connect).toBe('function');
+      expect(typeof result.model).toBe('function');
+    });
+
+    it('should properly type global mongoose cache', async () => {
+      connectDB = require('../../lib/mongodb').default;
+      
+      await connectDB();
+      
+      const cache = (global as any).mongoose;
+      expect(cache).toHaveProperty('conn');
+      expect(cache).toHaveProperty('promise');
     });
   });
 });
