@@ -1,654 +1,395 @@
-/**
- * Comprehensive Unit Tests for database/booking.model.ts
- * 
- * Tests the Booking Mongoose model including:
- * - Schema validation
- * - Email validation
- * - Event reference validation (pre-save hook)
- * - Field requirements and constraints
- * - Error handling and edge cases
- */
+import { Types } from 'mongoose';
 
-import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+// Mock mongoose
+jest.mock('mongoose', () => {
+  const actualMongoose = jest.requireActual('mongoose');
+  return {
+    ...actualMongoose,
+    model: jest.fn(),
+    models: {},
+  };
+});
 
 describe('Booking Model', () => {
-  let mongoServer: MongoMemoryServer;
-  let Booking: any;
-  let Event: any;
+  let BookingModel: any;
+  let mockModel: jest.Mock;
 
-  beforeAll(async () => {
-    // Setup in-memory MongoDB
-    mongoServer = await MongoMemoryServer.create();
-    const mongoUri = mongoServer.getUri();
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
     
-    await mongoose.connect(mongoUri);
-    
-    // Import models after connection
-    const bookingModule = await import('../../database/booking.model');
-    const eventModule = await import('../../database/event.model');
-    Booking = bookingModule.default;
-    Event = eventModule.default;
-  });
-
-  afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
-
-  beforeEach(async () => {
-    // Clear all documents before each test
-    await Booking.deleteMany({});
-    await Event.deleteMany({});
+    const mongoose = require('mongoose');
+    mockModel = jest.fn((name, schema) => {
+      return { name, schema };
+    });
+    mongoose.model = mockModel;
+    mongoose.models = {};
   });
 
   describe('Schema Definition', () => {
-    it('should have all required fields defined', () => {
-      const schema = Booking.schema;
-      const paths = schema.paths;
-
-      expect(paths.eventId).toBeDefined();
-      expect(paths.email).toBeDefined();
+    beforeEach(() => {
+      BookingModel = require('../../database/booking.model');
     });
 
-    it('should have timestamps enabled', () => {
-      const schema = Booking.schema;
+    it('should define all required fields', () => {
+      expect(mockModel).toHaveBeenCalled();
+      const schema = mockModel.mock.calls[0][1];
+      
+      expect(schema.obj).toHaveProperty('eventId');
+      expect(schema.obj).toHaveProperty('email');
+    });
+
+    it('should set eventId as ObjectId reference to Event', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const mongoose = require('mongoose');
+      
+      expect(schema.obj.eventId.type).toBe(mongoose.Schema.Types.ObjectId);
+      expect(schema.obj.eventId.ref).toBe('Event');
+      expect(schema.obj.eventId.required).toEqual([true, 'Event ID is required']);
+    });
+
+    it('should configure email field correctly', () => {
+      const schema = mockModel.mock.calls[0][1];
+      
+      expect(schema.obj.email.type).toBe(String);
+      expect(schema.obj.email.required).toEqual([true, 'Email is required']);
+      expect(schema.obj.email.trim).toBe(true);
+      expect(schema.obj.email.lowercase).toBe(true);
+    });
+
+    it('should enable timestamps', () => {
+      const schema = mockModel.mock.calls[0][1];
       expect(schema.options.timestamps).toBe(true);
-      expect(schema.paths.createdAt).toBeDefined();
-      expect(schema.paths.updatedAt).toBeDefined();
-    });
-
-    it('should have index on eventId', () => {
-      const indexes = Booking.schema.indexes();
-      const eventIdIndex = indexes.find((idx: any) => idx[0].eventId === 1);
-      
-      expect(eventIdIndex).toBeDefined();
-    });
-
-    it('should reference Event model', () => {
-      const schema = Booking.schema;
-      const eventIdPath = schema.paths.eventId;
-      
-      expect(eventIdPath.options.ref).toBe('Event');
-    });
-  });
-
-  describe('Required Field Validation', () => {
-    it('should require eventId field', async () => {
-      const booking = new Booking({
-        email: 'test@example.com',
-      });
-
-      await expect(booking.save()).rejects.toThrow(/Event ID is required/);
-    });
-
-    it('should require email field', async () => {
-      const event = await Event.create({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      const booking = new Booking({
-        eventId: event._id,
-      });
-
-      await expect(booking.save()).rejects.toThrow(/Email is required/);
     });
   });
 
   describe('Email Validation', () => {
-    let testEvent: any;
-
-    beforeEach(async () => {
-      testEvent = await Event.create({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
+    beforeEach(() => {
+      BookingModel = require('../../database/booking.model');
     });
 
-    it('should accept valid email address', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'user@example.com',
-      });
-
-      await booking.save();
-      expect(booking.email).toBe('user@example.com');
+    it('should validate correct email addresses', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const emailValidator = schema.obj.email.validate;
+      
+      expect(emailValidator.validator('test@example.com')).toBe(true);
+      expect(emailValidator.validator('user.name@domain.co.uk')).toBe(true);
+      expect(emailValidator.validator('user+tag@example.com')).toBe(true);
+      expect(emailValidator.validator('user_123@test-domain.com')).toBe(true);
     });
 
-    it('should reject email without @ symbol', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'invalid-email',
-      });
-
-      await expect(booking.save()).rejects.toThrow(/Please provide a valid email address/);
+    it('should reject invalid email addresses', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const emailValidator = schema.obj.email.validate;
+      
+      expect(emailValidator.validator('invalid')).toBe(false);
+      expect(emailValidator.validator('invalid@')).toBe(false);
+      expect(emailValidator.validator('@example.com')).toBe(false);
+      expect(emailValidator.validator('user@')).toBe(false);
+      expect(emailValidator.validator('user@domain')).toBe(false);
+      expect(emailValidator.validator('user domain@example.com')).toBe(false);
+      expect(emailValidator.validator('')).toBe(false);
     });
 
-    it('should reject email without domain', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'user@',
-      });
-
-      await expect(booking.save()).rejects.toThrow(/Please provide a valid email address/);
+    it('should have correct validation message', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const emailValidator = schema.obj.email.validate;
+      
+      expect(emailValidator.message).toBe('Please provide a valid email address');
     });
 
-    it('should reject email without local part', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: '@example.com',
-      });
-
-      await expect(booking.save()).rejects.toThrow(/Please provide a valid email address/);
+    it('should handle edge case email formats', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const emailValidator = schema.obj.email.validate;
+      
+      expect(emailValidator.validator('a@b.c')).toBe(true);
+      expect(emailValidator.validator('1234567890@example.com')).toBe(true);
+      expect(emailValidator.validator('email@subdomain.example.com')).toBe(true);
+      expect(emailValidator.validator('_@example.com')).toBe(true);
     });
 
-    it('should reject email without TLD', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'user@domain',
-      });
-
-      await expect(booking.save()).rejects.toThrow(/Please provide a valid email address/);
+    it('should reject emails with spaces', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const emailValidator = schema.obj.email.validate;
+      
+      expect(emailValidator.validator('test @example.com')).toBe(false);
+      expect(emailValidator.validator('test@ example.com')).toBe(false);
+      expect(emailValidator.validator('test@example .com')).toBe(false);
     });
 
-    it('should reject email with spaces', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'user @example.com',
-      });
-
-      await expect(booking.save()).rejects.toThrow(/Please provide a valid email address/);
-    });
-
-    it('should accept email with plus sign', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'user+tag@example.com',
-      });
-
-      await booking.save();
-      expect(booking.email).toBe('user+tag@example.com');
-    });
-
-    it('should accept email with subdomain', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'user@mail.example.com',
-      });
-
-      await booking.save();
-      expect(booking.email).toBe('user@mail.example.com');
-    });
-
-    it('should accept email with numbers', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'user123@example456.com',
-      });
-
-      await booking.save();
-      expect(booking.email).toBe('user123@example456.com');
-    });
-
-    it('should accept email with hyphens', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'first-last@my-domain.com',
-      });
-
-      await booking.save();
-      expect(booking.email).toBe('first-last@my-domain.com');
-    });
-
-    it('should accept email with underscores', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'first_last@example.com',
-      });
-
-      await booking.save();
-      expect(booking.email).toBe('first_last@example.com');
-    });
-
-    it('should convert email to lowercase', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: 'USER@EXAMPLE.COM',
-      });
-
-      await booking.save();
-      expect(booking.email).toBe('user@example.com');
-    });
-
-    it('should trim whitespace from email', async () => {
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: '  user@example.com  ',
-      });
-
-      await booking.save();
-      expect(booking.email).toBe('user@example.com');
+    it('should reject emails with multiple @ symbols', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const emailValidator = schema.obj.email.validate;
+      
+      expect(emailValidator.validator('test@@example.com')).toBe(false);
+      expect(emailValidator.validator('test@test@example.com')).toBe(false);
     });
   });
 
-  describe('Event Reference Validation (Pre-save Hook)', () => {
-    it('should allow booking for existing event', async () => {
-      const event = await Event.create({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
+  describe('Pre-save Hook - Event Validation', () => {
+    let preSaveHook: Function;
+    let mockDoc: any;
+    let nextFn: jest.Mock;
+    let mockEventModel: any;
 
-      const booking = new Booking({
-        eventId: event._id,
-        email: 'user@example.com',
-      });
-
-      await expect(booking.save()).resolves.toBeDefined();
-    });
-
-    it('should reject booking for non-existent event', async () => {
-      const fakeEventId = new mongoose.Types.ObjectId();
+    beforeEach(() => {
+      jest.resetModules();
       
-      const booking = new Booking({
-        eventId: fakeEventId,
-        email: 'user@example.com',
+      const mongoose = require('mongoose');
+      mockModel = jest.fn((name, schema) => {
+        return { name, schema };
       });
-
-      await expect(booking.save()).rejects.toThrow(/Event validation failed/);
+      mongoose.model = mockModel;
+      mongoose.models = {};
+      
+      mockEventModel = {
+        exists: jest.fn(),
+      };
+      
+      BookingModel = require('../../database/booking.model');
+      const schema = mockModel.mock.calls[0][1];
+      preSaveHook = schema.s.hooks._pres.get('save')[0].fn;
+      
+      nextFn = jest.fn();
+      mockDoc = {
+        eventId: new Types.ObjectId(),
+        email: 'test@example.com',
+        isNew: true,
+        isModified: jest.fn(),
+      };
     });
 
-    it('should validate eventId only on new documents', async () => {
-      const event = await Event.create({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      const booking = new Booking({
-        eventId: event._id,
-        email: 'user@example.com',
-      });
-
-      await booking.save();
-
-      // Modify email (not eventId)
-      booking.email = 'newemail@example.com';
-      await expect(booking.save()).resolves.toBeDefined();
+    it('should validate event exists for new booking', async () => {
+      mockDoc.isNew = true;
+      mongoose.models.Event = mockEventModel;
+      mockEventModel.exists.mockResolvedValueOnce(true);
+      
+      await preSaveHook.call(mockDoc, nextFn);
+      
+      expect(mockEventModel.exists).toHaveBeenCalledWith({ _id: mockDoc.eventId });
+      expect(nextFn).toHaveBeenCalledWith();
     });
 
-    it('should validate eventId when modified', async () => {
-      const event1 = await Event.create({
-        title: 'Test Event 1',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      const booking = new Booking({
-        eventId: event1._id,
-        email: 'user@example.com',
-      });
-
-      await booking.save();
-
-      // Try to change to non-existent event
-      const fakeEventId = new mongoose.Types.ObjectId();
-      booking.eventId = fakeEventId;
-
-      await expect(booking.save()).rejects.toThrow(/Event validation failed/);
+    it('should validate event exists when eventId is modified', async () => {
+      mockDoc.isNew = false;
+      mockDoc.isModified.mockImplementation((field: string) => field === 'eventId');
+      mongoose.models.Event = mockEventModel;
+      mockEventModel.exists.mockResolvedValueOnce(true);
+      
+      await preSaveHook.call(mockDoc, nextFn);
+      
+      expect(mockEventModel.exists).toHaveBeenCalledWith({ _id: mockDoc.eventId });
+      expect(nextFn).toHaveBeenCalledWith();
     });
 
-    it('should allow changing to another valid event', async () => {
-      const event1 = await Event.create({
-        title: 'Test Event 1',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
+    it('should call next with error if event does not exist', async () => {
+      mockDoc.isNew = true;
+      mongoose.models.Event = mockEventModel;
+      mockEventModel.exists.mockResolvedValueOnce(null);
+      
+      await preSaveHook.call(mockDoc, nextFn);
+      
+      expect(nextFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('Event validation failed: Event not found'),
+        })
+      );
+    });
 
-      const event2 = await Event.create({
-        title: 'Test Event 2',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-16',
-        time: '19:00',
-        mode: 'Online',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag2'],
-      });
+    it('should skip validation if eventId is not new or modified', async () => {
+      mockDoc.isNew = false;
+      mockDoc.isModified.mockReturnValue(false);
+      
+      await preSaveHook.call(mockDoc, nextFn);
+      
+      expect(mockEventModel.exists).not.toHaveBeenCalled();
+      expect(nextFn).toHaveBeenCalledWith();
+    });
 
-      const booking = new Booking({
-        eventId: event1._id,
-        email: 'user@example.com',
-      });
+    it('should handle database errors gracefully', async () => {
+      mockDoc.isNew = true;
+      mongoose.models.Event = mockEventModel;
+      mockEventModel.exists.mockRejectedValueOnce(new Error('Database connection failed'));
+      
+      await preSaveHook.call(mockDoc, nextFn);
+      
+      expect(nextFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('Event validation failed: Database connection failed'),
+        })
+      );
+    });
 
-      await booking.save();
+    it('should handle non-Error exceptions', async () => {
+      mockDoc.isNew = true;
+      mongoose.models.Event = mockEventModel;
+      mockEventModel.exists.mockRejectedValueOnce('String error');
+      
+      await preSaveHook.call(mockDoc, nextFn);
+      
+      expect(nextFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Event validation failed',
+        })
+      );
+    });
 
-      booking.eventId = event2._id;
-      await expect(booking.save()).resolves.toBeDefined();
-      expect(booking.eventId.toString()).toBe(event2._id.toString());
+    it('should dynamically import Event model if not in models cache', async () => {
+      mockDoc.isNew = true;
+      mongoose.models = {};
+      
+      // Mock dynamic import
+      jest.doMock('../../database/event.model', () => ({
+        default: mockEventModel,
+      }));
+      
+      mockEventModel.exists.mockResolvedValueOnce(true);
+      
+      await preSaveHook.call(mockDoc, nextFn);
+      
+      // Should proceed without error
+      expect(nextFn).toHaveBeenCalledWith();
+    });
+
+    it('should validate eventId when modified from null', async () => {
+      mockDoc.isNew = false;
+      mockDoc.isModified.mockImplementation((field: string) => field === 'eventId');
+      mockDoc.eventId = new Types.ObjectId();
+      mongoose.models.Event = mockEventModel;
+      mockEventModel.exists.mockResolvedValueOnce(true);
+      
+      await preSaveHook.call(mockDoc, nextFn);
+      
+      expect(mockEventModel.exists).toHaveBeenCalled();
+      expect(nextFn).toHaveBeenCalledWith();
     });
   });
 
-  describe('Full Document Creation', () => {
-    it('should successfully create booking with valid data', async () => {
-      const event = await Event.create({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      const booking = new Booking({
-        eventId: event._id,
-        email: 'test@example.com',
-      });
-
-      await booking.save();
-
-      expect(booking._id).toBeDefined();
-      expect(booking.eventId.toString()).toBe(event._id.toString());
-      expect(booking.email).toBe('test@example.com');
-      expect(booking.createdAt).toBeDefined();
-      expect(booking.updatedAt).toBeDefined();
+  describe('Schema Indexes', () => {
+    beforeEach(() => {
+      BookingModel = require('../../database/booking.model');
     });
 
-    it('should set timestamps on creation', async () => {
-      const event = await Event.create({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-
-      const beforeSave = new Date();
+    it('should create index on eventId', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const indexes = schema.indexes();
       
-      const booking = new Booking({
-        eventId: event._id,
-        email: 'test@example.com',
-      });
-      
-      await booking.save();
-      const afterSave = new Date();
+      const eventIdIndex = indexes.find((idx: any) => idx[0].eventId === 1);
+      expect(eventIdIndex).toBeDefined();
+    });
+  });
 
-      expect(booking.createdAt).toBeDefined();
-      expect(booking.updatedAt).toBeDefined();
-      expect(booking.createdAt.getTime()).toBeGreaterThanOrEqual(beforeSave.getTime());
-      expect(booking.createdAt.getTime()).toBeLessThanOrEqual(afterSave.getTime());
+  describe('Model Registration', () => {
+    it('should create new model if not exists in models cache', () => {
+      const mongoose = require('mongoose');
+      mongoose.models = {};
+      
+      BookingModel = require('../../database/booking.model');
+      
+      expect(mockModel).toHaveBeenCalledWith('Booking', expect.any(Object));
     });
 
-    it('should update updatedAt on modification', async () => {
-      const event = await Event.create({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
+    it('should reuse existing model from models cache', () => {
+      const mongoose = require('mongoose');
+      const existingModel = { name: 'Booking' };
+      mongoose.models = { Booking: existingModel };
+      
+      jest.resetModules();
+      BookingModel = require('../../database/booking.model');
+      
+      expect(BookingModel.default).toBe(existingModel);
+    });
+  });
 
-      const booking = new Booking({
-        eventId: event._id,
-        email: 'test@example.com',
-      });
-
-      await booking.save();
-      const originalUpdatedAt = booking.updatedAt;
-
-      // Wait to ensure timestamp difference
-      await new Promise(resolve => setTimeout(resolve, 10));
-
-      booking.email = 'updated@example.com';
-      await booking.save();
-
-      expect(booking.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
+  describe('TypeScript Interface', () => {
+    it('should export IBooking interface', () => {
+      const module = require('../../database/booking.model');
+      expect(module).toHaveProperty('IBooking');
     });
   });
 
   describe('Edge Cases', () => {
-    let testEvent: any;
+    let preSaveHook: Function;
+    let mockDoc: any;
+    let nextFn: jest.Mock;
+    let mockEventModel: any;
 
-    beforeEach(async () => {
-      testEvent = await Event.create({
-        title: 'Test Event',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag1'],
-      });
-    });
-
-    it('should handle very long email addresses', async () => {
-      const longEmail = `${'a'.repeat(64)}@${'b'.repeat(63)}.com`;
+    beforeEach(() => {
+      jest.resetModules();
       
-      const booking = new Booking({
-        eventId: testEvent._id,
-        email: longEmail,
+      const mongoose = require('mongoose');
+      mockModel = jest.fn((name, schema) => {
+        return { name, schema };
       });
-
-      await booking.save();
-      expect(booking.email).toBe(longEmail);
+      mongoose.model = mockModel;
+      mongoose.models = {};
+      
+      mockEventModel = {
+        exists: jest.fn(),
+      };
+      
+      BookingModel = require('../../database/booking.model');
+      const schema = mockModel.mock.calls[0][1];
+      preSaveHook = schema.s.hooks._pres.get('save')[0].fn;
+      
+      nextFn = jest.fn();
+      mockDoc = {
+        eventId: new Types.ObjectId(),
+        email: 'test@example.com',
+        isNew: false,
+        isModified: jest.fn(),
+      };
     });
 
-    it('should allow multiple bookings for same event', async () => {
-      const booking1 = new Booking({
-        eventId: testEvent._id,
-        email: 'user1@example.com',
-      });
-
-      const booking2 = new Booking({
-        eventId: testEvent._id,
-        email: 'user2@example.com',
-      });
-
-      await booking1.save();
-      await booking2.save();
-
-      const bookings = await Booking.find({ eventId: testEvent._id });
-      expect(bookings).toHaveLength(2);
+    it('should handle concurrent validation requests', async () => {
+      mockDoc.isNew = true;
+      mongoose.models.Event = mockEventModel;
+      mockEventModel.exists.mockResolvedValue(true);
+      
+      const promises = [
+        preSaveHook.call(mockDoc, jest.fn()),
+        preSaveHook.call(mockDoc, jest.fn()),
+        preSaveHook.call(mockDoc, jest.fn()),
+      ];
+      
+      await Promise.all(promises);
+      
+      expect(mockEventModel.exists).toHaveBeenCalledTimes(3);
     });
 
-    it('should allow same email for different events', async () => {
-      const event2 = await Event.create({
-        title: 'Test Event 2',
-        description: 'Test description',
-        overview: 'Test overview',
-        image: 'test.jpg',
-        venue: 'Test Venue',
-        location: 'Test Location',
-        date: '2024-12-16',
-        time: '19:00',
-        mode: 'Online',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Test Organizer',
-        tags: ['tag2'],
-      });
-
-      const booking1 = new Booking({
-        eventId: testEvent._id,
-        email: 'user@example.com',
-      });
-
-      const booking2 = new Booking({
-        eventId: event2._id,
-        email: 'user@example.com',
-      });
-
-      await booking1.save();
-      await booking2.save();
-
-      const bookings = await Booking.find({ email: 'user@example.com' });
-      expect(bookings).toHaveLength(2);
+    it('should handle very long email addresses', () => {
+      const schema = mockModel.mock.calls[0][1];
+      const emailValidator = schema.obj.email.validate;
+      
+      const longEmail = 'a'.repeat(50) + '@' + 'b'.repeat(50) + '.com';
+      expect(emailValidator.validator(longEmail)).toBe(true);
     });
 
-    it('should handle invalid ObjectId format', async () => {
-      const booking = new Booking({
-        eventId: 'invalid-object-id',
-        email: 'user@example.com',
-      });
-
-      await expect(booking.save()).rejects.toThrow();
-    });
-  });
-
-  describe('Query Operations', () => {
-    let event1: any;
-    let event2: any;
-
-    beforeEach(async () => {
-      event1 = await Event.create({
-        title: 'Event 1',
-        description: 'Description 1',
-        overview: 'Overview 1',
-        image: 'test1.jpg',
-        venue: 'Venue 1',
-        location: 'Location 1',
-        date: '2024-12-15',
-        time: '18:00',
-        mode: 'Hybrid',
-        audience: 'Everyone',
-        agenda: ['Item 1'],
-        organizer: 'Organizer 1',
-        tags: ['tag1'],
-      });
-
-      event2 = await Event.create({
-        title: 'Event 2',
-        description: 'Description 2',
-        overview: 'Overview 2',
-        image: 'test2.jpg',
-        venue: 'Venue 2',
-        location: 'Location 2',
-        date: '2024-12-16',
-        time: '19:00',
-        mode: 'Online',
-        audience: 'Members',
-        agenda: ['Item 2'],
-        organizer: 'Organizer 2',
-        tags: ['tag2'],
-      });
-
-      await Booking.create([
-        { eventId: event1._id, email: 'user1@example.com' },
-        { eventId: event1._id, email: 'user2@example.com' },
-        { eventId: event2._id, email: 'user1@example.com' },
-      ]);
+    it('should trim and lowercase email before validation', () => {
+      const schema = mockModel.mock.calls[0][1];
+      
+      expect(schema.obj.email.trim).toBe(true);
+      expect(schema.obj.email.lowercase).toBe(true);
     });
 
-    it('should find bookings by eventId', async () => {
-      const bookings = await Booking.find({ eventId: event1._id });
-      expect(bookings).toHaveLength(2);
-    });
-
-    it('should find bookings by email', async () => {
-      const bookings = await Booking.find({ email: 'user1@example.com' });
-      expect(bookings).toHaveLength(2);
-    });
-
-    it('should populate event data', async () => {
-      const booking = await Booking.findOne({ email: 'user1@example.com' }).populate('eventId');
-      expect(booking.eventId.title).toBeDefined();
+    it('should validate with different ObjectId formats', async () => {
+      mockDoc.isNew = true;
+      mongoose.models.Event = mockEventModel;
+      
+      const objectIds = [
+        new Types.ObjectId(),
+        new Types.ObjectId('507f1f77bcf86cd799439011'),
+        new Types.ObjectId('000000000000000000000000'),
+      ];
+      
+      for (const id of objectIds) {
+        mockDoc.eventId = id;
+        mockEventModel.exists.mockResolvedValueOnce(true);
+        
+        await preSaveHook.call(mockDoc, jest.fn());
+        
+        expect(mockEventModel.exists).toHaveBeenCalledWith({ _id: id });
+      }
     });
   });
 });

@@ -1,8 +1,8 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/__tests__'],
-  testMatch: ['**/__tests__/**/*.test.ts'],
+  roots: ['<rootDir>'],
+  testMatch: ['**/__tests__/**/*.test.ts', '**/?(*.)+(spec|test).ts'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/$1',
   },
@@ -11,13 +11,15 @@ module.exports = {
     'lib/**/*.ts',
     '!**/*.d.ts',
     '!**/node_modules/**',
+    '!**/__tests__/**',
   ],
-  setupFilesAfterEnv: ['<rootDir>/__tests__/setup.ts'],
-  transform: {
-    '^.+\\.tsx?$': ['ts-jest', {
-      tsconfig: {
-        jsx: 'react',
-      },
-    }],
+  coverageThreshold: {
+    global: {
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
+    },
   },
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
 };
